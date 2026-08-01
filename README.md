@@ -266,6 +266,10 @@ docker exec -it postgres_primary psql -U postgres -c \
 
 ---
 
+## Production
+
+สำหรับ setup แบบ production (SSL, tuning, PgBouncer, monitoring, backup, PITR) ดู [PRODUCTION.md](PRODUCTION.md) พร้อมไฟล์ `*.prod.yml`, `*.prod.conf`, `.env.prod.example` และ [scripts/](scripts/)
+
 ## License
 
 MIT — ดู [LICENSE.md](LICENSE.md)

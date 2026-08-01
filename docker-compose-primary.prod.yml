@@ -1,0 +1,44 @@
+services:
+  postgres_primary:
+    image: postgres:17
+    container_name: postgres_primary
+    env_file:
+      - .env
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_primary_data:/var/lib/postgresql/data
+      - ./primary/postgresql.prod.conf:/etc/postgresql/postgresql.conf:ro
+      - ./primary/pg_hba.prod.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./initdb.d/00_init.sh:/docker-entrypoint-initdb.d/00_init.sh:ro
+      # WAL archive volume — required if archive_mode is enabled in postgresql.prod.conf
+      - ./archive:/archive
+      # TLS certs — required if ssl is enabled in postgresql.prod.conf
+      # - ./certs/server.crt:/etc/ssl/certs/server.crt:ro
+      # - ./certs/server.key:/etc/ssl/private/server.key:ro
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      REPLICATION_USER: ${REPLICATION_USER:?REPLICATION_USER is required}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:?REPLICATION_PASSWORD is required}
+      APP_USER: ${APP_USER:-}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+
+volumes:
+  postgres_primary_data:

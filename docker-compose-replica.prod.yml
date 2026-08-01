@@ -1,0 +1,39 @@
+services:
+  postgres_replica:
+    image: postgres:17
+    container_name: postgres_replica
+    env_file:
+      - .env
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_replica_data:/var/lib/postgresql/data
+      - ./replica/postgresql.prod.conf:/etc/replica/postgresql.conf:ro
+      - ./replica/replica-entrypoint.prod.sh:/replica-entrypoint.sh:ro
+      # TLS certs — required if ssl is enabled in postgresql.prod.conf
+      # - ./certs/server.crt:/etc/ssl/certs/server.crt:ro
+      # - ./certs/server.key:/etc/ssl/private/server.key:ro
+    environment:
+      PRIMARY_HOST: ${PRIMARY_HOST:?PRIMARY_HOST is required}
+      REPLICATION_USER: ${REPLICATION_USER:?REPLICATION_USER is required}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:?REPLICATION_PASSWORD is required}
+      REPLICA_SLOT: ${REPLICA_SLOT:-replica_slot_1}
+      REPLICA_NAME: ${REPLICA_NAME:-replica_1}
+    entrypoint: ["bash", "/replica-entrypoint.sh"]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$${REPLICATION_USER}\""]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          cpus: '4'
+          memory: 8G
+        reservations:
+          cpus: '2'
+          memory: 4G
+
+volumes:
+  postgres_replica_data:

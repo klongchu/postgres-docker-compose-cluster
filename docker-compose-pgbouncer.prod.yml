@@ -1,0 +1,28 @@
+# PgBouncer connection pooler — deploy on the primary host (or on app hosts).
+# App servers connect to pgbouncer:6432 instead of postgres:5432.
+services:
+  pgbouncer:
+    image: bitnami/pgbouncer:latest
+    container_name: pgbouncer
+    env_file:
+      - .env
+    ports:
+      - "6432:6432"
+    environment:
+      # Upstream Postgres
+      POSTGRESQL_HOST: ${PRIMARY_HOST:-postgres_primary}
+      POSTGRESQL_PORT: 5432
+      POSTGRESQL_USER: ${APP_USER:?APP_USER is required}
+      POSTGRESQL_PASSWORD: ${APP_PASSWORD:?APP_PASSWORD is required}
+      POSTGRESQL_DATABASE: ${POSTGRES_DB:?POSTGRES_DB is required}
+      # PgBouncer client-facing auth
+      PGBOUNCER_DATABASE: ${POSTGRES_DB}
+      PGBOUNCER_AUTH_TYPE: scram-sha-256
+      PGBOUNCER_POOL_MODE: transaction
+      PGBOUNCER_MAX_CLIENT_CONN: 1000
+      PGBOUNCER_DEFAULT_POOL_SIZE: 25
+      PGBOUNCER_MIN_POOL_SIZE: 5
+      PGBOUNCER_RESERVE_POOL_SIZE: 5
+      PGBOUNCER_SERVER_IDLE_TIMEOUT: 600
+    restart: unless-stopped
+    depends_on: []

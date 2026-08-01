@@ -1,0 +1,16 @@
+# Prometheus postgres_exporter — deploy on every Postgres host.
+# Scrape target: <host>:9187/metrics
+services:
+  postgres_exporter:
+    image: prometheuscommunity/postgres-exporter:latest
+    container_name: postgres_exporter
+    env_file:
+      - .env
+    ports:
+      - "9187:9187"
+    environment:
+      # Connect via the local Postgres container. Adjust the host if
+      # running the exporter outside the compose network.
+      DATA_SOURCE_NAME: "postgresql://${POSTGRES_USER}:${POSTGRES_PASSWORD}@postgres_primary:5432/${POSTGRES_DB}?sslmode=prefer"
+      PG_EXPORTER_AUTO_DISCOVER_DATABASES: "true"
+    restart: unless-stopped
