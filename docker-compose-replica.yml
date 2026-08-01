@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres_replica:
     image: postgres:17
@@ -10,26 +8,16 @@ services:
       - "5432:5432"
     volumes:
       - postgres_replica_data:/var/lib/postgresql/data
+      - ./replica/postgresql.conf:/etc/replica/postgresql.conf:ro
+      - ./replica/replica-entrypoint.sh:/replica-entrypoint.sh:ro
     environment:
-      - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-      - PRIMARY_HOST=${PRIMARY_HOST}
-      - REPLICA_SLOT=${REPLICA_SLOT:-replica_slot_1}
-    command: >
-      bash -c "
-        echo 'Waiting for primary to be ready...';
-        while ! pg_isready -h $${PRIMARY_HOST} -p 5432 -U ${POSTGRES_USER}; do sleep 1; done;
-        echo 'Primary is ready, starting replica...';
-        rm -rf /var/lib/postgresql/data/* 2>/dev/null || true;
-        PGPASSWORD=${POSTGRES_PASSWORD} psql -h $${PRIMARY_HOST} -U replica -d postgres -tAc \"SELECT 1 FROM pg_replication_slots WHERE slot_name='$${REPLICA_SLOT}'\" | grep -q 1 || \
-          PGPASSWORD=${POSTGRES_PASSWORD} psql -h $${PRIMARY_HOST} -U replica -d postgres -c \"SELECT pg_create_physical_replication_slot('$${REPLICA_SLOT}')\";
-        PGPASSWORD=${POSTGRES_PASSWORD} pg_basebackup -h $${PRIMARY_HOST} -U replica -D /var/lib/postgresql/data -Fp -Xs -R -P --slot=$${REPLICA_SLOT};
-        echo 'Replication setup complete, starting PostgreSQL...';
-        docker-entrypoint.sh postgres
-      "
+      PRIMARY_HOST: ${PRIMARY_HOST:?PRIMARY_HOST is required}
+      REPLICATION_USER: ${REPLICATION_USER:?REPLICATION_USER is required}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:?REPLICATION_PASSWORD is required}
+      REPLICA_SLOT: ${REPLICA_SLOT:-replica_slot_1}
+    entrypoint: ["bash", "/replica-entrypoint.sh"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${REPLICATION_USER}\""]
       interval: 5s
       timeout: 5s
       retries: 5

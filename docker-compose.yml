@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   postgres_primary:
     image: postgres:17
@@ -10,46 +8,53 @@ services:
       - "5432:5432"
     volumes:
       - postgres_primary_data:/var/lib/postgresql/data
-      - ./initdb.d/00_init.sql:/docker-entrypoint-initdb.d/00_init.sql
+      - ./primary/postgresql.conf:/etc/postgresql/postgresql.conf:ro
+      - ./primary/pg_hba.conf:/etc/postgresql/pg_hba.conf:ro
+      - ./initdb.d/00_init.sh:/docker-entrypoint-initdb.d/00_init.sh:ro
     environment:
-      - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-    command: postgres -c 'wal_level=replica' -c 'max_wal_senders=10' -c 'max_replication_slots=10' -c 'listen_addresses=*'
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      REPLICATION_USER: ${REPLICATION_USER:?REPLICATION_USER is required}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:?REPLICATION_PASSWORD is required}
+      APP_USER: ${APP_USER:-}
+      APP_PASSWORD: ${APP_PASSWORD:-}
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${POSTGRES_USER}\" -d \"$${POSTGRES_DB}\""]
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - postgres-network
 
   postgres_replica:
     image: postgres:17
     container_name: postgres_replica
+    depends_on:
+      postgres_primary:
+        condition: service_healthy
     env_file:
       - .env
     ports:
       - "5433:5432"
     volumes:
       - postgres_replica_data:/var/lib/postgresql/data
+      - ./replica/postgresql.conf:/etc/replica/postgresql.conf:ro
+      - ./replica/replica-entrypoint.sh:/replica-entrypoint.sh:ro
     environment:
-      - POSTGRES_DB=${POSTGRES_DB}
-      - POSTGRES_USER=${POSTGRES_USER}
-      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-    command: >
-      bash -c "
-        echo 'Waiting for primary to be ready...';
-        while ! pg_isready -h postgres_primary -p 5432 -U ${POSTGRES_USER}; do sleep 1; done;
-        echo 'Primary is ready, starting replica...';
-        rm -rf /var/lib/postgresql/data/* 2>/dev/null || true;
-        PGPASSWORD=${POSTGRES_PASSWORD} pg_basebackup -h postgres_primary -U replica -D /var/lib/postgresql/data -Fp -Xs -R -P;
-        echo 'Replication setup complete, starting PostgreSQL...';
-        docker-entrypoint.sh postgres
-      "
+      PRIMARY_HOST: postgres_primary
+      REPLICATION_USER: ${REPLICATION_USER:?REPLICATION_USER is required}
+      REPLICATION_PASSWORD: ${REPLICATION_PASSWORD:?REPLICATION_PASSWORD is required}
+      REPLICA_SLOT: ${REPLICA_SLOT:-replica_slot_1}
+    entrypoint: ["bash", "/replica-entrypoint.sh"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      test: ["CMD-SHELL", "pg_isready -U \"$${REPLICATION_USER}\""]
       interval: 5s
       timeout: 5s
       retries: 5
+    networks:
+      - postgres-network
 
 volumes:
   postgres_primary_data:
@@ -57,4 +62,4 @@ volumes:
 
 networks:
   postgres-network:
-    driver: bridge 
+    driver: bridge

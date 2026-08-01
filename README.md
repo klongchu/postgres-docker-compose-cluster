@@ -6,104 +6,76 @@
 
 ## ภาพรวม
 
-Docker Compose ชุดนี้สร้าง PostgreSQL 17 cluster ที่มี primary (read-write) หนึ่งตัว และ read replica หนึ่งตัว เพื่อรองรับ high availability และกระจายโหลดการอ่านข้อมูล
+Docker Compose ชุดนี้สร้าง PostgreSQL 17 cluster ที่มี primary (read-write) หนึ่งตัว และ read replica ตั้งแต่หนึ่งตัวขึ้นไป โดยใช้ **physical streaming replication** พร้อม replication slot แยกต่อ replica
 
-**รูปแบบการติดตั้ง 2 แบบ:**
+**รูปแบบการติดตั้ง:**
 
-- **แบบเครื่องเดียว** (`docker-compose.yml`) - primary และ replica อยู่บนเครื่องเดียวกัน
-- **แบบแยกเซิร์ฟเวอร์** (`docker-compose-primary.yml` + `docker-compose-replica.yml`) - primary และ replica อยู่คนละเครื่อง (physical/VM)
+- **แบบเครื่องเดียว** ([docker-compose.yml](docker-compose.yml)) — primary และ replica อยู่บนเครื่องเดียวกัน
+- **แบบแยกเซิร์ฟเวอร์** ([docker-compose-primary.yml](docker-compose-primary.yml) + [docker-compose-replica.yml](docker-compose-replica.yml)) — primary กับ replica อยู่คนละ physical server / VM รองรับ 1 primary + หลาย replica
 
 ![Docker-compose Stack](docs/docker-compose-stack.png)
 
-## คุณสมบัติ
+## โครงสร้างไฟล์
 
-### จุดเด่นของ PostgreSQL 17
-
-PostgreSQL 17 มีการปรับปรุงที่สำคัญหลายอย่าง:
-
-- **Logical Replication ที่ดีขึ้น**: ประสิทธิภาพและความเสถียรของ logical replication ดีขึ้น
-- **Query Performance ที่เร็วขึ้น**: การวางแผนและประมวลผล query ถูก optimize
-- **Partitioning ที่ดีขึ้น**: ความสามารถในการทำ table partitioning เพิ่มขึ้น
-- **Security ที่แข็งแรงขึ้น**: มีฟีเจอร์ด้าน security ใหม่ๆ
-- **Monitoring ที่ดีขึ้น**: เครื่องมือด้าน monitoring และ observability ดีขึ้น
-- **Performance ที่ดีขึ้นทั้งระบบ**: มีการปรับปรุงประสิทธิภาพในหลายจุด
+```text
+.
+├── docker-compose.yml              # เครื่องเดียว
+├── docker-compose-primary.yml      # primary (แยกเครื่อง)
+├── docker-compose-replica.yml      # replica (แยกเครื่อง)
+├── .env.example                    # template สำหรับ environment
+├── primary/
+│   ├── postgresql.conf             # config primary
+│   └── pg_hba.conf                 # authentication rules
+├── replica/
+│   ├── postgresql.conf             # config replica (hot standby)
+│   └── replica-entrypoint.sh       # bootstrap script
+└── initdb.d/
+    └── 00_init.sh                  # สร้าง replication user + app user
+```
 
 ## ⚠️ ข้อควรระวังสำคัญ
 
-> **setup นี้เป็น Proof of Concept (PoC) ห้ามใช้บน production**
+> **setup นี้เป็น Proof of Concept (PoC) ไม่แนะนำสำหรับ production โดยตรง**
 
-setup นี้เหมาะสำหรับ:
-
-- การเรียนรู้
-- Development environment
-- ทดสอบแนวคิดเรื่อง replication
-- ทำความเข้าใจพื้นฐาน PostgreSQL replication
-
-**สิ่งที่ต้องพิจารณาสำหรับ production:**
-
-- ยังไม่มี security hardening
-- ไม่มี backup strategy
-- ไม่มี monitoring/alerting
-- ไม่มี high availability นอกจาก replication พื้นฐาน
-- ไม่มี disaster recovery
-- ไม่มี network isolation
-- ไม่มี SSL/TLS encryption
-- ยังไม่ได้จัดการ user/role อย่างเหมาะสม
-- ไม่มี logging/auditing
-
-สำหรับ production ควร:
-
-- ทำ security hardening
-- ตั้ง monitoring/alerting
-- ทำ backup และ recovery procedure
-- ใช้ managed database service
-- ปรึกษาผู้เชี่ยวชาญด้าน database
-- ทำตาม PostgreSQL best practices
-
-### คุณสมบัติของ Cluster
-
-- Primary (Read-Write) และ Read Replica
-- ตั้งค่า replication อัตโนมัติ
-- Persistent data storage
-- Health monitoring
-- Network แยก (แบบเครื่องเดียว) หรือเชื่อมข้ามเครื่อง (แบบแยกเซิร์ฟเวอร์)
+สำหรับ production ควรพิจารณา: SSL/TLS, จำกัด CIDR ใน `pg_hba.conf`, backup, monitoring, connection pooler (PgBouncer/PgCat), failover automation
 
 ## สถาปัตยกรรม
 
-### การทำงานของ Replication
+```text
+                    ┌─────────────┐
+                    │   PRIMARY   │  read-write
+                    └──────┬──────┘
+                           │ WAL streaming
+                  ┌────────┴────────┐
+                  ▼                 ▼
+          ┌─────────────┐   ┌─────────────┐
+          │  REPLICA 1  │   │  REPLICA 2  │  read-only
+          └─────────────┘   └─────────────┘
+```
 
-setup นี้ใช้ physical replication ระหว่าง primary กับ replica:
+Primary เขียน WAL แล้ว replica แต่ละตัว stream WAL ผ่าน slot ของตัวเอง (`replica_slot_1`, `replica_slot_2`, ...) primary จะไม่ลบ WAL จนกว่า replica ทุกตัวจะ apply ครบ
 
-1. Primary node (`postgres_primary`) รับ write operation
-2. การเปลี่ยนแปลงถูกเขียนลง Write-Ahead Log (WAL)
-3. Replica (`postgres_replica`) stream WAL เหล่านั้นต่อเนื่อง
-4. Replica นำ WAL ไป apply เพื่อให้ข้อมูลตรงกับ primary
-5. Replica ทำงานใน hot standby mode รับ read operation ได้
+## Environment Variables
+
+จาก [.env.example](.env.example):
+
+| ตัวแปร | ใช้บน | ค่าตัวอย่าง |
+| --- | --- | --- |
+| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | primary | postgres |
+| `REPLICATION_USER` / `REPLICATION_PASSWORD` | primary + replica | replicator |
+| `APP_USER` / `APP_PASSWORD` | primary (optional) | app |
+| `PRIMARY_HOST` | replica | `postgres_primary` หรือ IP จริง |
+| `REPLICA_SLOT` | replica | `replica_slot_1` (ไม่ซ้ำต่อ replica) |
 
 ---
 
 ## เริ่มต้นแบบเครื่องเดียว
 
-ใช้เมื่อ primary และ replica อยู่บนเครื่องเดียวกัน
-
-### 1. Clone และตั้งค่า
-
 ```bash
 git clone git@github.com:luismr/postgres-docker-compose-cluster.git
 cd postgres-docker-compose-cluster
 cp .env.example .env
-```
-
-### 2. เริ่ม Cluster
-
-```bash
 docker-compose up -d
-```
-
-### 3. ตรวจสอบ Service
-
-```bash
-docker-compose ps
 ```
 
 **Port:**
@@ -113,361 +85,187 @@ docker-compose ps
 
 ---
 
-## เริ่มต้นแบบแยกเซิร์ฟเวอร์ (คนละเครื่อง)
-
-ใช้เมื่อ primary และ replica อยู่บน physical server หรือ VM คนละเครื่อง
+## เริ่มต้นแบบแยกเซิร์ฟเวอร์ (1 Primary)
 
 ### สิ่งที่ต้องมี
 
-- Server 2 เครื่องที่ติดตั้ง Docker
-- Network ที่เชื่อมถึงกันได้
-- Firewall เปิด port 5432 จาก replica ไป primary
+- Server อย่างน้อย 2 เครื่องที่ติดตั้ง Docker + Docker Compose
+- Network ที่เชื่อมถึงกันได้ ระหว่างเครื่อง primary กับ replica
+- Firewall ของ primary เปิด TCP port 5432 ให้ IP ของ replica
 
 ### เซิร์ฟเวอร์ 1 (Primary)
 
-1. **Clone repository:**
+1. Clone และตั้งค่า `.env`:
 
 ```bash
 git clone git@github.com:luismr/postgres-docker-compose-cluster.git
 cd postgres-docker-compose-cluster
-```
-
-1. **สร้าง `.env`:**
-
-```bash
 cp .env.example .env
-# แก้ค่าตามต้องการ (ค่า default: postgres/postgres/postgres)
+# แก้ password ให้แข็งแรง
 ```
 
-1. **สร้าง `pg_hba.conf`** เพื่ออนุญาตให้ replica เชื่อมต่อ:
-
-```bash
-cat > pg_hba.conf << 'EOF'
-# TYPE  DATABASE        USER            ADDRESS                 METHOD
-local   all             all                                     trust
-host    all             all             127.0.0.1/32            trust
-host    all             all             ::1/128                 trust
-host    all             all             0.0.0.0/0               md5
-host    replication     replica         0.0.0.0/0               md5
-EOF
-```
-
-**⚠️ หมายเหตุด้าน Security:** `0.0.0.0/0` เปิดให้ทุก IP บน production ควรเปลี่ยนเป็น IP ของ replica เท่านั้น:
+1. **จำกัด IP ใน [primary/pg_hba.conf](primary/pg_hba.conf)** เปลี่ยน `0.0.0.0/0` เป็น IP ของ replica:
 
 ```text
-host    replication     replica         192.168.1.20/32         md5
+host    replication     replicator      192.168.1.20/32         scram-sha-256
+host    replication     replicator      192.168.1.30/32         scram-sha-256
+host    all             all             192.168.1.0/24          scram-sha-256
 ```
 
-1. **แก้ `docker-compose-primary.yml`** ให้ mount pg_hba.conf:
-
-```yaml
-volumes:
-  - ./pg_hba.conf:/etc/postgresql/pg_hba.conf
-  - ./initdb.d/00_init.sql:/docker-entrypoint-initdb.d/00_init.sql
-  - postgres_primary_data:/var/lib/postgresql/data
-```
-
-1. **เริ่ม primary:**
+1. เริ่ม primary:
 
 ```bash
 docker-compose -f docker-compose-primary.yml up -d
 ```
 
-1. **ดู IP ของเซิร์ฟเวอร์ primary:**
-
-```bash
-ip addr show  # Linux
-ipconfig      # Windows
-```
-
-จด IP ที่ได้ (เช่น `192.168.1.10`)
-
-### เซิร์ฟเวอร์ 2 (Replica)
-
-1. **Clone repository:**
-
-```bash
-git clone git@github.com:luismr/postgres-docker-compose-cluster.git
-cd postgres-docker-compose-cluster
-```
-
-1. **สร้าง `.env` โดยใส่ IP ของ primary:**
-
-```bash
-cat > .env << EOF
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres
-POSTGRES_DB=postgres
-PRIMARY_HOST=192.168.1.10
-EOF
-```
-
-เปลี่ยน `192.168.1.10` เป็น IP จริงของเซิร์ฟเวอร์ primary
-
-1. **เริ่ม replica:**
-
-```bash
-docker-compose -f docker-compose-replica.yml up -d
-```
-
-1. **ตรวจสอบ log:**
-
-```bash
-docker-compose -f docker-compose-replica.yml logs -f postgres_replica
-```
-
-ให้ดูข้อความ:
-
-- "Waiting for primary to be ready..."
-- "Primary is ready, starting replica..."
-- "Replication setup complete"
-
-### ตรวจสอบ Replication แบบแยกเซิร์ฟเวอร์
-
-**บนเซิร์ฟเวอร์ Primary:**
-
-```bash
-docker exec -it postgres_primary psql -U postgres -c "SELECT * FROM pg_stat_replication;"
-```
-
-ควรเห็น 1 row ที่แสดงการเชื่อมต่อของ replica
-
-**บนเซิร์ฟเวอร์ Replica:**
-
-```bash
-docker exec -it postgres_replica psql -U postgres -c "SELECT pg_is_in_recovery();"
-```
-
-ต้องได้ผลลัพธ์ `t` (true)
-
----
-
-## เริ่มต้นแบบ 1 Primary + หลาย Replica (3 เซิร์ฟเวอร์ขึ้นไป)
-
-ใช้เมื่อมี replica มากกว่า 1 ตัว (เช่น 1 primary + 2 replica = 3 เซิร์ฟเวอร์) แต่ละ replica ต้องมี **replication slot ชื่อไม่ซ้ำกัน** ป้องกัน slot ชนกันที่ primary
-
-```text
-                    ┌─────────────┐
-                    │   PRIMARY   │  (เซิร์ฟเวอร์ 1)
-                    └──────┬──────┘
-                  ┌────────┴────────┐
-                  ▼                 ▼
-          ┌─────────────┐   ┌─────────────┐
-          │  REPLICA 1  │   │  REPLICA 2  │
-          │ (เซิร์ฟเวอร์ 2)│   │ (เซิร์ฟเวอร์ 3)│
-          └─────────────┘   └─────────────┘
-```
-
-### เซิร์ฟเวอร์ 1 (Primary) — แบบหลาย Replica
-
-ทำตามขั้นตอน Primary แบบแยกเซิร์ฟเวอร์ด้านบนตามปกติ แต่ `pg_hba.conf` ต้องเพิ่ม IP ของ replica **ทุกตัว**:
-
-```text
-host    replication     replica         192.168.1.20/32         md5
-host    replication     replica         192.168.1.30/32         md5
-```
-
-`max_wal_senders=10` และ `max_replication_slots=10` ที่ตั้งไว้ใน [docker-compose-primary.yml](docker-compose-primary.yml) รองรับ replica ได้สูงสุด 10 ตัวอยู่แล้ว ไม่ต้องแก้เพิ่ม
+1. หา IP ของเครื่อง primary (`ip addr` / `ipconfig`) เช่น `192.168.1.10`
 
 ### เซิร์ฟเวอร์ 2 (Replica 1)
 
-`.env`:
+1. Clone repo แล้วสร้าง `.env`:
 
 ```bash
-cat > .env << EOF
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres
-POSTGRES_DB=postgres
+cp .env.example .env
+```
+
+แก้ค่า:
+
+```bash
 PRIMARY_HOST=192.168.1.10
 REPLICA_SLOT=replica_slot_1
-EOF
+REPLICATION_USER=replicator
+REPLICATION_PASSWORD=<ตรงกับ primary>
 ```
+
+1. เริ่ม replica:
 
 ```bash
 docker-compose -f docker-compose-replica.yml up -d
+docker-compose -f docker-compose-replica.yml logs -f
 ```
 
-### เซิร์ฟเวอร์ 3 (Replica 2)
+ในล็อกต้องเห็น:
 
-ใช้ **ไฟล์ compose เดียวกัน** เปลี่ยนแค่ `REPLICA_SLOT` ให้ไม่ซ้ำกับ replica อื่น:
-
-```bash
-cat > .env << EOF
-POSTGRES_USER=postgres
-POSTGRES_PASSWORD=postgres
-POSTGRES_DB=postgres
-PRIMARY_HOST=192.168.1.10
-REPLICA_SLOT=replica_slot_2
-EOF
-```
-
-```bash
-docker-compose -f docker-compose-replica.yml up -d
-```
-
-**⚠️ สำคัญ:** `REPLICA_SLOT` ต้องไม่ซ้ำกันในทุกเซิร์ฟเวอร์ replica ถ้าซ้ำ replica ที่ start ทีหลังจะแย่ง slot กับตัวก่อนหน้า ทำให้ replication ของตัวเก่าหยุดทำงาน
-
-### เพิ่ม Replica ตัวที่ 3, 4, ... ในอนาคต
-
-ทำซ้ำขั้นตอนเซิร์ฟเวอร์ replica ข้างต้น เพิ่ม IP ใน `pg_hba.conf` ของ primary และตั้ง `REPLICA_SLOT` ใหม่ที่ไม่ซ้ำ (`replica_slot_3`, `replica_slot_4`, ...)
-
-### ตรวจสอบว่า Replica ทั้งหมดเชื่อมต่อ
-
-บน primary:
-
-```bash
-docker exec -it postgres_primary psql -U postgres -c "SELECT client_addr, slot_name, state FROM pg_stat_replication;"
-docker exec -it postgres_primary psql -U postgres -c "SELECT slot_name, active FROM pg_replication_slots;"
-```
-
-ต้องเห็น row ตามจำนวน replica ทั้งหมด และ `active` เป็น `t` ทุกตัว
+- `>>> Waiting for primary (192.168.1.10) to be ready...`
+- `>>> Ensuring replication slot 'replica_slot_1' exists on primary...`
+- `>>> Taking base backup from primary using slot 'replica_slot_1'...`
+- `>>> Starting replica in hot standby mode...`
 
 ---
 
-## การใช้งาน
+## เพิ่ม Replica ตัวที่ 2, 3, ... (3 เซิร์ฟเวอร์ขึ้นไป)
 
-### ตรวจสอบสถานะ Replication
+`max_wal_senders=10` และ `max_replication_slots=10` ใน [primary/postgresql.conf](primary/postgresql.conf) รองรับ replica ได้สูงสุด 10 ตัวโดยไม่ต้องแก้อะไร
 
-**แบบเครื่องเดียว:**
+**สำหรับแต่ละ replica เพิ่มใหม่:**
+
+1. เพิ่ม IP ของ replica ตัวใหม่ใน [primary/pg_hba.conf](primary/pg_hba.conf) แล้ว reload:
 
 ```bash
-docker exec -it postgres_primary psql -U postgres -c "SELECT * FROM pg_stat_replication;"
+docker exec postgres_primary psql -U postgres -c "SELECT pg_reload_conf();"
+```
+
+1. บนเซิร์ฟเวอร์ replica ใหม่ ตั้ง `.env` โดยใช้ **`REPLICA_SLOT` ที่ไม่ซ้ำ**:
+
+```bash
+PRIMARY_HOST=192.168.1.10
+REPLICA_SLOT=replica_slot_2      # หรือ 3, 4, ...
+```
+
+1. `docker-compose -f docker-compose-replica.yml up -d`
+
+**⚠️ สำคัญ:** slot ต้องไม่ซ้ำกัน ถ้าซ้ำ replica ตัวที่ start ทีหลังจะแย่ง slot ทำให้ replication ตัวเก่าหยุดทำงาน
+
+---
+
+## ตรวจสอบสถานะ
+
+**บน primary** — ดู replica ทั้งหมดที่เชื่อมต่ออยู่:
+
+```bash
+docker exec -it postgres_primary psql -U postgres -c "
+SELECT client_addr, application_name, state, sync_state,
+       pg_wal_lsn_diff(pg_current_wal_lsn(), replay_lsn) AS lag_bytes
+FROM pg_stat_replication;"
+```
+
+**บน primary** — ดู slot ทั้งหมด (ต้องเป็น `active = t` ทุกตัว):
+
+```bash
+docker exec -it postgres_primary psql -U postgres -c "
+SELECT slot_name, active, restart_lsn FROM pg_replication_slots;"
+```
+
+**บน replica** — ยืนยันว่าอยู่ใน recovery mode:
+
+```bash
 docker exec -it postgres_replica psql -U postgres -c "SELECT pg_is_in_recovery();"
 ```
 
-**แบบแยกเซิร์ฟเวอร์ (รันบนแต่ละเครื่อง):**
+ต้องได้ `t`
+
+## ทดสอบ Replication
 
 ```bash
-# บนเซิร์ฟเวอร์ primary
-docker exec -it postgres_primary psql -U postgres -c "SELECT * FROM pg_stat_replication;"
+# บน primary — สร้าง table + insert
+docker exec -it postgres_primary psql -U postgres -c \
+  "CREATE TABLE test(id serial primary key, data text); INSERT INTO test(data) VALUES('hello');"
 
-# บนเซิร์ฟเวอร์ replica
-docker exec -it postgres_replica psql -U postgres -c "SELECT pg_is_in_recovery();"
-```
-
-### ทดสอบ Replication
-
-1. **สร้าง table บน primary:**
-
-```bash
-docker exec -it postgres_primary psql -U postgres -c "CREATE TABLE test (id SERIAL PRIMARY KEY, data TEXT);"
-```
-
-1. **Insert ข้อมูลบน primary:**
-
-```bash
-docker exec -it postgres_primary psql -U postgres -c "INSERT INTO test (data) VALUES ('test data');"
-```
-
-1. **ตรวจสอบบน replica:**
-
-```bash
+# บน replica — อ่านได้ทันที
 docker exec -it postgres_replica psql -U postgres -c "SELECT * FROM test;"
+
+# บน replica — เขียนไม่ได้ (read-only)
+docker exec -it postgres_replica psql -U postgres -c "INSERT INTO test(data) VALUES('nope');"
+# ERROR: cannot execute INSERT in a read-only transaction
 ```
 
-### หยุด Cluster
-
-**แบบเครื่องเดียว:**
+## หยุดและล้างข้อมูล
 
 ```bash
-docker-compose down
-docker-compose down -v  # ลบ volume ด้วย (ข้อมูลจะหายทั้งหมด)
-```
+# เครื่องเดียว
+docker-compose down          # หยุด (volume ยังอยู่)
+docker-compose down -v       # หยุด + ลบ volume ข้อมูลหายทั้งหมด
 
-**แบบแยกเซิร์ฟเวอร์:**
-
-```bash
-# บนเซิร์ฟเวอร์ primary
+# แยกเครื่อง
 docker-compose -f docker-compose-primary.yml down
-
-# บนเซิร์ฟเวอร์ replica
 docker-compose -f docker-compose-replica.yml down
 ```
 
 ---
 
-## แก้ปัญหา
+## Troubleshooting
 
 ### Replica เชื่อมต่อ Primary ไม่ได้
 
-**ตรวจสอบ network:**
-
 ```bash
-# จากเซิร์ฟเวอร์ replica
+# จาก replica
 ping <primary-ip>
-telnet <primary-ip> 5432
+nc -zv <primary-ip> 5432
+
+# บน primary — ดู log
+docker logs postgres_primary --tail 50
 ```
 
-**ตรวจสอบ firewall:**
+ตรวจว่า `pg_hba.conf` มี rule สำหรับ IP ของ replica แล้ว
+
+### Slot Overflow / Primary WAL เต็ม
+
+ถ้า replica offline นาน primary จะเก็บ WAL ไว้เรื่อยๆ จนดิสก์เต็ม แก้:
 
 ```bash
-# บนเซิร์ฟเวอร์ primary (Linux)
-sudo ufw allow 5432/tcp
-sudo iptables -L -n | grep 5432
+docker exec -it postgres_primary psql -U postgres -c \
+  "SELECT pg_drop_replication_slot('replica_slot_X');"
 ```
 
-**ดู log Docker:**
-
-```bash
-docker-compose -f docker-compose-replica.yml logs postgres_replica
-```
-
-### Replication ล่าช้า (Lag)
-
-**ตรวจสอบ lag บน primary:**
-
-```bash
-docker exec -it postgres_primary psql -U postgres -c "
-SELECT
-  client_addr,
-  state,
-  sent_lsn,
-  write_lsn,
-  flush_lsn,
-  replay_lsn,
-  sync_state
-FROM pg_stat_replication;
-"
-```
+**หมายเหตุ:** drop แล้วต้อง re-bootstrap replica ตัวนั้นใหม่
 
 ### Authentication Failed
 
-**ตรวจสอบว่า password ใน `.env` ทั้งสองเครื่องตรงกัน**
-
-**ตรวจสอบว่า pg_hba.conf อนุญาต IP ของ replica แล้ว:**
-
-```bash
-docker exec -it postgres_primary cat /var/lib/postgresql/data/pg_hba.conf
-```
+- ตรวจ `REPLICATION_PASSWORD` ตรงกันทั้ง primary และ replica
+- ตรวจ `pg_hba.conf` ระบุ `replicator` ไม่ใช่ user อื่น
 
 ---
-
-## โครงสร้างไฟล์
-
-```text
-.
-├── docker-compose.yml              # setup แบบเครื่องเดียว
-├── docker-compose-primary.yml      # เซิร์ฟเวอร์ primary (แบบแยก)
-├── docker-compose-replica.yml      # เซิร์ฟเวอร์ replica (แบบแยก)
-├── .env.example                    # template สำหรับ environment
-├── initdb.d/
-│   └── 00_init.sql                 # สร้าง role และ slot สำหรับ replication
-├── pg_hba.conf                     # (ต้องสร้างเองสำหรับ primary แบบแยก)
-└── README.md
-```
-
----
-
-## Contributing
-
-ยินดีรับ contribution วิธีร่วม:
-
-1. Fork repository
-2. สร้าง feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit การเปลี่ยนแปลง (`git commit -m 'Add some amazing feature'`)
-4. Push ไปยัง branch (`git push origin feature/amazing-feature`)
-5. เปิด Pull Request
 
 ## License
 
-โปรเจกต์นี้ใช้ MIT License ดูรายละเอียดที่ [LICENSE.md](LICENSE.md)
+MIT — ดู [LICENSE.md](LICENSE.md)
