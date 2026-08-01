@@ -10,6 +10,7 @@
 | `docker-compose-replica.prod.yml` | Replica Postgres (one file per server) |
 | `docker-compose-pgbouncer.prod.yml` | Connection pooler for app traffic |
 | `docker-compose-monitoring.prod.yml` | Prometheus postgres_exporter |
+| `docker-compose-pgadmin.prod.yml` | pgAdmin web UI (loopback only, front with TLS) |
 | `primary/postgresql.prod.conf` | Primary tuning (defaults for ~8GB RAM) |
 | `primary/pg_hba.prod.conf` | Production access rules (deny remote by default) |
 | `replica/postgresql.prod.conf` | Replica tuning |
@@ -168,7 +169,32 @@ Recommended alerts:
 - Connection utilization above 80%
 - Backup older than 24 hours
 
-## 9. Backup
+## 9. pgAdmin (Optional)
+
+pgAdmin exposes an admin web UI for the cluster. In production it must never be reachable from the public internet directly.
+
+Prepare credentials in `.env`:
+
+```bash
+PGADMIN_EMAIL=admin@yourcompany.com
+PGADMIN_PASSWORD=<use openssl rand -base64 32>
+```
+
+Start:
+
+```bash
+docker compose -f docker-compose-pgadmin.prod.yml up -d
+```
+
+Access:
+
+- The stack binds `127.0.0.1:5050` by default — reachable only from the host.
+- For remote access, front it with nginx/Traefik + TLS + VPN or SSO. Never publish port 5050 directly.
+- Server mode and master password are enabled — every user has their own login inside pgAdmin.
+
+Register servers manually inside the UI (Host = primary/replica IP, Port = 5432, User = `postgres` or `app`).
+
+## 10. Backup
 
 Local backups alone are not sufficient. Send backups to separate storage (S3, object storage, NAS) with encryption and retention.
 
@@ -195,7 +221,7 @@ Restore-test backups regularly. A backup without a successful restore test is no
 
 For larger production systems, use pgBackRest or WAL-G instead of the sample local archive command.
 
-## 10. TLS
+## 11. TLS
 
 Create certificates using your internal CA. Do not use self-signed certificates for untrusted networks.
 
@@ -206,7 +232,7 @@ Create certificates using your internal CA. Do not use self-signed certificates 
 5. Change client rules from `host` to `hostssl` in `pg_hba.prod.conf`.
 6. Use `sslmode=verify-full` with CA verification on clients and replicas.
 
-## 11. Failover
+## 12. Failover
 
 These Compose files provide replication, **not automatic failover**. Manual promotion:
 
@@ -216,7 +242,7 @@ docker exec postgres_replica pg_ctl promote -D /var/lib/postgresql/data
 
 Manual promotion does not redirect applications or safely rebuild the old primary. For automatic production failover, use Patroni + etcd/Consul, CloudNativePG on Kubernetes, or a managed PostgreSQL service.
 
-## 12. Deployment Checklist
+## 13. Deployment Checklist
 
 - [ ] Unique secure passwords stored outside Git
 - [ ] `pg_hba.prod.conf` restricted to exact IPs/subnets

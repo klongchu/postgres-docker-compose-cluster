@@ -19,9 +19,10 @@ Docker Compose ชุดนี้สร้าง PostgreSQL 17 cluster ที่
 
 ```text
 .
-├── docker-compose.yml              # เครื่องเดียว
+├── docker-compose.yml              # เครื่องเดียว (รวม pgAdmin)
 ├── docker-compose-primary.yml      # primary (แยกเครื่อง)
 ├── docker-compose-replica.yml      # replica (แยกเครื่อง)
+├── docker-compose-pgadmin.yml      # pgAdmin standalone (แยกเครื่อง)
 ├── .env.example                    # template สำหรับ environment
 ├── primary/
 │   ├── postgresql.conf             # config primary
@@ -263,6 +264,38 @@ docker exec -it postgres_primary psql -U postgres -c \
 
 - ตรวจ `REPLICATION_PASSWORD` ตรงกันทั้ง primary และ replica
 - ตรวจ `pg_hba.conf` ระบุ `replicator` ไม่ใช่ user อื่น
+
+---
+
+## pgAdmin (Web UI)
+
+**เครื่องเดียว:** อยู่ใน [docker-compose.yml](docker-compose.yml) แล้ว รันครั้งเดียวได้ทั้ง cluster + pgAdmin
+
+**แยกเครื่อง:** ใช้ [docker-compose-pgadmin.yml](docker-compose-pgadmin.yml) รันเครื่องไหนก็ได้ที่เข้าถึง primary/replica ได้
+
+```bash
+docker-compose -f docker-compose-pgadmin.yml up -d
+```
+
+เปิด browser: <http://localhost:5050>
+
+Login ด้วยค่าจาก `.env`:
+
+- `PGADMIN_EMAIL` (default: `admin@example.com`)
+- `PGADMIN_PASSWORD` (default: `admin`)
+
+**เพิ่ม server ใน pgAdmin:**
+
+1. คลิกขวา **Servers** → **Register** → **Server...**
+2. Tab **General** → Name: `primary` (หรืออะไรก็ได้)
+3. Tab **Connection**:
+   - Host: `postgres_primary` (เครื่องเดียว) หรือ IP จริง (แยกเครื่อง)
+   - Port: `5432`
+   - Username: `postgres` หรือ `app`
+   - Password: ตาม `.env`
+4. Save
+
+ทำซ้ำสำหรับ replica (Host: `postgres_replica` หรือ IP + port `5432` ของเครื่อง replica)
 
 ---
 
