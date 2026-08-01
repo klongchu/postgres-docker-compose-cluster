@@ -72,7 +72,7 @@ Primary เขียน WAL แล้ว replica แต่ละตัว stream
 ## เริ่มต้นแบบเครื่องเดียว
 
 ```bash
-git clone git@github.com:luismr/postgres-docker-compose-cluster.git
+git clone git@github.com:klongchu/postgres-docker-compose-cluster.git
 cd postgres-docker-compose-cluster
 cp .env.example .env
 docker-compose up -d
