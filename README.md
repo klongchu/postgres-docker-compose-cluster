@@ -242,6 +242,88 @@ docker exec -it postgres_replica psql -U postgres -c "SELECT pg_is_in_recovery()
 
 ---
 
+## เริ่มต้นแบบ 1 Primary + หลาย Replica (3 เซิร์ฟเวอร์ขึ้นไป)
+
+ใช้เมื่อมี replica มากกว่า 1 ตัว (เช่น 1 primary + 2 replica = 3 เซิร์ฟเวอร์) แต่ละ replica ต้องมี **replication slot ชื่อไม่ซ้ำกัน** ป้องกัน slot ชนกันที่ primary
+
+```text
+                    ┌─────────────┐
+                    │   PRIMARY   │  (เซิร์ฟเวอร์ 1)
+                    └──────┬──────┘
+                  ┌────────┴────────┐
+                  ▼                 ▼
+          ┌─────────────┐   ┌─────────────┐
+          │  REPLICA 1  │   │  REPLICA 2  │
+          │ (เซิร์ฟเวอร์ 2)│   │ (เซิร์ฟเวอร์ 3)│
+          └─────────────┘   └─────────────┘
+```
+
+### เซิร์ฟเวอร์ 1 (Primary) — แบบหลาย Replica
+
+ทำตามขั้นตอน Primary แบบแยกเซิร์ฟเวอร์ด้านบนตามปกติ แต่ `pg_hba.conf` ต้องเพิ่ม IP ของ replica **ทุกตัว**:
+
+```text
+host    replication     replica         192.168.1.20/32         md5
+host    replication     replica         192.168.1.30/32         md5
+```
+
+`max_wal_senders=10` และ `max_replication_slots=10` ที่ตั้งไว้ใน [docker-compose-primary.yml](docker-compose-primary.yml) รองรับ replica ได้สูงสุด 10 ตัวอยู่แล้ว ไม่ต้องแก้เพิ่ม
+
+### เซิร์ฟเวอร์ 2 (Replica 1)
+
+`.env`:
+
+```bash
+cat > .env << EOF
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+POSTGRES_DB=postgres
+PRIMARY_HOST=192.168.1.10
+REPLICA_SLOT=replica_slot_1
+EOF
+```
+
+```bash
+docker-compose -f docker-compose-replica.yml up -d
+```
+
+### เซิร์ฟเวอร์ 3 (Replica 2)
+
+ใช้ **ไฟล์ compose เดียวกัน** เปลี่ยนแค่ `REPLICA_SLOT` ให้ไม่ซ้ำกับ replica อื่น:
+
+```bash
+cat > .env << EOF
+POSTGRES_USER=postgres
+POSTGRES_PASSWORD=postgres
+POSTGRES_DB=postgres
+PRIMARY_HOST=192.168.1.10
+REPLICA_SLOT=replica_slot_2
+EOF
+```
+
+```bash
+docker-compose -f docker-compose-replica.yml up -d
+```
+
+**⚠️ สำคัญ:** `REPLICA_SLOT` ต้องไม่ซ้ำกันในทุกเซิร์ฟเวอร์ replica ถ้าซ้ำ replica ที่ start ทีหลังจะแย่ง slot กับตัวก่อนหน้า ทำให้ replication ของตัวเก่าหยุดทำงาน
+
+### เพิ่ม Replica ตัวที่ 3, 4, ... ในอนาคต
+
+ทำซ้ำขั้นตอนเซิร์ฟเวอร์ replica ข้างต้น เพิ่ม IP ใน `pg_hba.conf` ของ primary และตั้ง `REPLICA_SLOT` ใหม่ที่ไม่ซ้ำ (`replica_slot_3`, `replica_slot_4`, ...)
+
+### ตรวจสอบว่า Replica ทั้งหมดเชื่อมต่อ
+
+บน primary:
+
+```bash
+docker exec -it postgres_primary psql -U postgres -c "SELECT client_addr, slot_name, state FROM pg_stat_replication;"
+docker exec -it postgres_primary psql -U postgres -c "SELECT slot_name, active FROM pg_replication_slots;"
+```
+
+ต้องเห็น row ตามจำนวน replica ทั้งหมด และ `active` เป็น `t` ทุกตัว
+
+---
+
 ## การใช้งาน
 
 ### ตรวจสอบสถานะ Replication

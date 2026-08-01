@@ -15,13 +15,16 @@ services:
       - POSTGRES_USER=${POSTGRES_USER}
       - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
       - PRIMARY_HOST=${PRIMARY_HOST}
+      - REPLICA_SLOT=${REPLICA_SLOT:-replica_slot_1}
     command: >
       bash -c "
         echo 'Waiting for primary to be ready...';
         while ! pg_isready -h $${PRIMARY_HOST} -p 5432 -U ${POSTGRES_USER}; do sleep 1; done;
         echo 'Primary is ready, starting replica...';
         rm -rf /var/lib/postgresql/data/* 2>/dev/null || true;
-        PGPASSWORD=${POSTGRES_PASSWORD} pg_basebackup -h $${PRIMARY_HOST} -U replica -D /var/lib/postgresql/data -Fp -Xs -R -P;
+        PGPASSWORD=${POSTGRES_PASSWORD} psql -h $${PRIMARY_HOST} -U replica -d postgres -tAc \"SELECT 1 FROM pg_replication_slots WHERE slot_name='$${REPLICA_SLOT}'\" | grep -q 1 || \
+          PGPASSWORD=${POSTGRES_PASSWORD} psql -h $${PRIMARY_HOST} -U replica -d postgres -c \"SELECT pg_create_physical_replication_slot('$${REPLICA_SLOT}')\";
+        PGPASSWORD=${POSTGRES_PASSWORD} pg_basebackup -h $${PRIMARY_HOST} -U replica -D /var/lib/postgresql/data -Fp -Xs -R -P --slot=$${REPLICA_SLOT};
         echo 'Replication setup complete, starting PostgreSQL...';
         docker-entrypoint.sh postgres
       "

@@ -5,5 +5,5 @@ DO $$ BEGIN
   END IF;
 END $$;
 
--- Create replication slot if it doesn't exist
-SELECT pg_create_physical_replication_slot('replica_slot', true); 
+-- Replication slots are created per-replica via pg_basebackup --create-slot
+-- Each replica must set a unique REPLICA_SLOT name in its .env
