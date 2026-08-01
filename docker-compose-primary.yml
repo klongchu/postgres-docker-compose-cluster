@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  postgres_primary:
+    image: postgres:17
+    container_name: postgres_primary
+    env_file:
+      - .env
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_primary_data:/var/lib/postgresql/data
+      - ./initdb.d/00_init.sql:/docker-entrypoint-initdb.d/00_init.sql
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB}
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    command: postgres -c 'wal_level=replica' -c 'max_wal_senders=10' -c 'max_replication_slots=10' -c 'listen_addresses=*'
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - postgres-cluster-network
+
+volumes:
+  postgres_primary_data:
+
+networks:
+  postgres-cluster-network:
+    external: true
