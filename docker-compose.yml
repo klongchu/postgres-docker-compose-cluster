@@ -49,7 +49,7 @@ services:
       REPLICA_SLOT: ${REPLICA_SLOT:-replica_slot_1}
     entrypoint: ["bash", "/replica-entrypoint.sh"]
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U \"$${REPLICATION_USER}\""]
+      test: ["CMD-SHELL", "pg_isready -U \"$${REPLICATION_USER}\" -d postgres"]
       interval: 5s
       timeout: 5s
       retries: 5
